@@ -1,96 +1,58 @@
-#![feature(proc_macro_span)]
-#![feature(proc_macro_def_site)]
-use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{parse_macro_input, Data, DataStruct, DeriveInput, Fields};
-mod util;
-use util::*;
+use quote::ToTokens as _;
 
-#[proc_macro_attribute]
-pub fn sort(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as DeriveInput);
-    let vis = input.vis;
-    let name = input.ident;
-    let generics = input.generics;
-    let expanded: proc_macro2::TokenStream = match &input.data {
-        Data::Struct(DataStruct {
-            fields: Fields::Named(fields),
-            ..
-        }) => {
-            let mut named_fields: Vec<_> = fields.named.iter().collect();
-            named_fields.sort_by_key(|f| hash(&f.ident.clone().unwrap().to_string()));
-            quote! {
-                #vis struct #name #generics {
-                    #(#named_fields),*
-                }
-            }
-        }
-        Data::Struct(_) => panic!("Expected named fields"),
-        Data::Enum(data) => {
-            let mut variants: Vec<_> = data.variants.iter().collect();
-            variants.sort_by_key(|v| hash(&v.ident.to_string()));
-            quote! {
-                #vis enum #name #generics {
-                    #(#variants),*
-                }
-            }
-        }
-        _ => panic!("Expected a struct or enum"),
-    };
-    TokenStream::from(expanded)
-}
-#[proc_macro_derive(StableID)]
-pub fn stable_id(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let name = input.ident;
-    let mut type_string = match input.data {
-        Data::Struct(data) => match data.fields {
-            Fields::Named(fields) => {
+mod util;
+
+fn expand_derive_stable_id(input: &mut syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let name = &input.ident;
+    let type_string = match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            syn::Fields::Named(fields) => {
                 let type_str_list: Vec<String> = fields
                     .named
                     .iter()
-                    .map(|f| {
-                        format!(
-                            "{}: {}",
-                            f.ident.as_ref().unwrap().to_string(),
-                            f.ty.to_token_stream().to_string()
-                        )
+                    .map(|f| match &f.ident {
+                        Some(ident) => format!("{ident}: {}", f.ty.to_token_stream()),
+                        None => {
+                            format!("{}", f.ty.to_token_stream())
+                        }
                     })
                     .collect();
-                format!("struct~{}{{{}}}", name.to_string(), type_str_list.join(";"))
+                format!("struct~{}{{{}}}", name, type_str_list.join(";"))
             }
-            Fields::Unit => {
-                format!("struct~{}", name.to_string())
+            syn::Fields::Unit => {
+                format!("struct~{}", name)
             }
-            Fields::Unnamed(fields) => {
+            syn::Fields::Unnamed(fields) => {
                 let type_str_list: Vec<String> = fields
                     .unnamed
                     .iter()
-                    .map(|f| f.ident.clone().unwrap().to_string())
+                    .map(|f| match &f.ident {
+                        Some(ident) => format!("{ident}: {}", f.ty.to_token_stream()),
+                        None => {
+                            format!("{}", f.ty.to_token_stream())
+                        }
+                    })
                     .collect();
-                format!("struct~{}({})", name.to_string(), type_str_list.join(","))
+                format!("struct~{}({})", name, type_str_list.join(","))
             }
         },
-        Data::Enum(data) => {
+        syn::Data::Enum(data) => {
             let type_str_list: Vec<String> = data
                 .variants
                 .iter()
-                .map(|v| {
-                    format!(
-                        "{}{}",
-                        v.ident.to_string(),
-                        v.fields.to_token_stream().to_string(),
-                    )
-                })
+                .map(|v| format!("{}{}", v.ident, v.fields.to_token_stream(),))
                 .collect();
-            format!("enum~{}{{{}}}", name.to_string(), type_str_list.join(","))
+            format!("enum~{}{{{}}}", name, type_str_list.join(","))
         }
-        _ => panic!("Expected a struct or enum"),
+        syn::Data::Union(_) => {
+            panic!("#[derive(stable_typeid::StableID)] can only be implemented on struct or enum")
+        }
     };
-    type_string = format!("{}%{}", get_pkg_name(), type_string);
-    let hash = hash(&type_string);
+    let type_string = format!("{}%{}", util::get_pkg_name(), type_string);
+    let hash = util::hash(&type_string);
     let doc = format!("type_name = {} \ntype_id = {}", type_string, hash);
-    let expanded = quote! {
+
+    let impl_block = quote::quote! {
         #[doc = #doc]
         impl stable_typeid::StableAny for #name {
             fn stable_id(&self) -> &'static stable_typeid::StableId where Self: Sized {
@@ -102,18 +64,13 @@ pub fn stable_id(input: TokenStream) -> TokenStream {
             const _STABLE_ID: &'static stable_typeid::StableId = &stable_typeid::StableId(#hash);
         }
     };
-    TokenStream::from(expanded)
+    Ok(impl_block)
 }
 
-#[proc_macro_attribute]
-pub fn stable_sorted_type(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let sort = sort(attr, item);
-    let stable = stable_id(sort.clone());
-    let sort = proc_macro2::TokenStream::from(sort);
-    let stable = proc_macro2::TokenStream::from(stable);
-    let expanded = quote! {
-        #sort
-        #stable
-    };
-    TokenStream::from(expanded)
+#[proc_macro_derive(StableID)]
+pub fn stable_id(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let mut input = syn::parse_macro_input!(input as syn::DeriveInput);
+    expand_derive_stable_id(&mut input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }

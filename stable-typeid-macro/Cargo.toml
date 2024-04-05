@@ -1,15 +1,16 @@
 [package]
 name = "stable-typeid-macro"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "MIT"
 description = "stable typeid macro"
 authors = ["BERADQ <adqber123@outlook.com>"]
-repository = "https://github.com/BERADQ/stable-typeid" 
+repository = "https://github.com/BERADQ/stable-typeid"
+
 [dependencies]
-proc-macro2 = "1.0.76"
-quote = "1.0.35"
-syn = {version="2.0.48",features=["parsing"]}
+proc-macro2 = { version = "1.0.79", features = ["proc-macro"] }
+quote = { version = "1.0.35", features = ["proc-macro"] }
+syn = { version = "2.0.58", features = ["parsing", "proc-macro"] }
 
 [lib]
 proc-macro = true
